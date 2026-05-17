@@ -9,7 +9,7 @@ from scheduler.module_version_checker import register_scheduler_tools
 
 mcp = FastMCP(
     name="mcp-infra-server",
-    description="Automates end-to-end AWS infrastructure creation: account creation, pipeline orchestration, and live inventory sync.",
+    instructions="Automates end-to-end AWS infrastructure creation: account creation, pipeline orchestration, and live inventory sync.",
 )
 
 register_github_tools(mcp)
