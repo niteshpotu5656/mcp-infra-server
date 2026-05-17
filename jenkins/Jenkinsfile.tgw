@@ -1,0 +1,81 @@
+// TGW Pipeline
+// Purpose: Create Transit Gateway in Shared Services account and re-share to new account
+//          with static routes and propagation configured.
+// Must run AFTER log-account pipeline and BEFORE network-infra pipeline.
+
+pipeline {
+  agent any
+
+  parameters {
+    string(name: 'ACCOUNT_ID', description: 'AWS Account ID of the new account to attach to TGW')
+  }
+
+  environment {
+    TF_PLUGIN_CACHE_DIR = '/var/jenkins_home/terraform-plugin-cache'
+    AWS_DEFAULT_REGION  = 'us-east-1'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        git branch: 'main',
+            credentialsId: 'github-token',
+            url: "https://github.com/${env.GITHUB_ORG}/network-infra.git"
+      }
+    }
+
+    stage('Terraform Init') {
+      steps {
+        sh '''
+          mkdir -p $TF_PLUGIN_CACHE_DIR
+          terraform init \
+            -backend-config="bucket=aft-terraform-state" \
+            -backend-config="key=tgw/${ACCOUNT_ID}/terraform.tfstate" \
+            -backend-config="region=${AWS_DEFAULT_REGION}"
+        '''
+      }
+    }
+
+    stage('Checkov Scan') {
+      steps {
+        sh 'checkov -d . --output json --compact --quiet'
+      }
+    }
+
+    stage('Terraform Plan') {
+      steps {
+        sh '''
+          terraform plan \
+            -var="target_account_id=${ACCOUNT_ID}" \
+            -out=tfplan
+        '''
+      }
+    }
+
+    stage('Terraform Apply') {
+      steps {
+        sh 'terraform apply -auto-approve tfplan'
+      }
+    }
+
+    stage('Verify TGW Share') {
+      steps {
+        sh '''
+          echo "Verifying TGW attachment and route propagation for account ${ACCOUNT_ID}..."
+          aws ram get-resource-share-associations \
+            --association-type PRINCIPAL \
+            --query "resourceShareAssociations[?associatedEntity=='${ACCOUNT_ID}']"
+        '''
+      }
+    }
+  }
+
+  post {
+    success {
+      script { currentBuild.description = "account_id=${env.ACCOUNT_ID}" }
+    }
+    failure {
+      echo "TGW pipeline failed for account ${ACCOUNT_ID}. Check logs above."
+    }
+  }
+}

@@ -1,0 +1,79 @@
+// Network Infra Pipeline
+// Purpose: Create VPC, subnets, NAT, KMS, security groups, VPC flow logs, SSM, VPCE
+//          for a new child account.
+// Must run AFTER log-account, checkov file, and TGW pipelines.
+
+pipeline {
+  agent any
+
+  parameters {
+    string(name: 'ACCOUNT_ID',   description: 'AWS Account ID')
+    string(name: 'ENVIRONMENT',  description: 'nonprod | prod | dr')
+    string(name: 'VPC_CIDR',     description: 'VPC CIDR block e.g. 10.0.0.0/16')
+  }
+
+  environment {
+    TF_PLUGIN_CACHE_DIR = '/var/jenkins_home/terraform-plugin-cache'
+    AWS_DEFAULT_REGION  = 'us-east-1'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        git branch: "network-infra/${env.ACCOUNT_ID}",
+            credentialsId: 'github-token',
+            url: "https://github.com/${env.GITHUB_ORG}/network-infra.git"
+      }
+    }
+
+    stage('Terraform Init') {
+      steps {
+        sh '''
+          mkdir -p $TF_PLUGIN_CACHE_DIR
+          terraform init \
+            -backend-config="bucket=aft-terraform-state" \
+            -backend-config="key=network-infra/${ENVIRONMENT}/${ACCOUNT_ID}/terraform.tfstate" \
+            -backend-config="region=${AWS_DEFAULT_REGION}"
+        '''
+      }
+    }
+
+    stage('Checkov Scan + Tag Validation') {
+      steps {
+        sh '''
+          checkov -d . --output json --compact --quiet
+          checkov -d . --check CKV_AWS_RESOURCE_TAGS --output json --compact
+        '''
+      }
+    }
+
+    stage('Terraform Plan') {
+      steps {
+        sh '''
+          terraform plan \
+            -var="account_id=${ACCOUNT_ID}" \
+            -var="environment=${ENVIRONMENT}" \
+            -var="vpc_cidr=${VPC_CIDR}" \
+            -var-file="tags.tfvars" \
+            -out=tfplan
+        '''
+      }
+    }
+
+    stage('Terraform Apply') {
+      steps {
+        sh 'terraform apply -auto-approve tfplan'
+      }
+    }
+  }
+
+  post {
+    success {
+      script { currentBuild.description = "account_id=${env.ACCOUNT_ID}" }
+      echo "Network infra created for account ${ACCOUNT_ID} in ${ENVIRONMENT}."
+    }
+    failure {
+      echo "Network infra pipeline failed for account ${ACCOUNT_ID}."
+    }
+  }
+}

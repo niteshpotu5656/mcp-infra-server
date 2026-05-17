@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "mcp-infra-server": {
+      "command": "python",
+      "args": ["server.py"],
+      "cwd": "H:/Terraform/Mcp/mcp-infra-server",
+      "env": {
+        "GITHUB_TOKEN":                    "your_github_pat_here",
+        "GITHUB_ORG":                      "your_org_name",
+        "GITHUB_MODULES_REPO":             "modules",
+        "GITHUB_NETWORK_REPO":             "network-infra",
+        "GITHUB_INFRA_REPO":               "infra-requests",
+        "JENKINS_URL":                     "http://your-jenkins-url:8080",
+        "JENKINS_USER":                    "your_jenkins_user",
+        "JENKINS_TOKEN":                   "your_jenkins_api_token",
+        "AWS_REGION":                      "us-east-1",
+        "AWS_AFT_ACCOUNT_ID":              "123456789012",
+        "AWS_LOG_ACCOUNT_ID":              "123456789013",
+        "AWS_SHARED_SERVICES_ACCOUNT_ID":  "123456789014",
+        "NETBOX_URL":                      "http://your-netbox-url:8000",
+        "NETBOX_TOKEN":                    "your_netbox_api_token",
+        "VAULT_URL":                       "http://your-vault-url:8200",
+        "VAULT_TOKEN":                     "your_vault_token",
+        "CHECKOV_REPO_PATH":               "/path/to/checkov/configs",
+        "TF_PLUGIN_CACHE_DIR":             "/var/jenkins_home/terraform-plugin-cache"
+      }
+    }
+  }
+}

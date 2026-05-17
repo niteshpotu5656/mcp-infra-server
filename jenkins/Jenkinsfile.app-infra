@@ -1,0 +1,79 @@
+// Application Infra Pipeline
+// Purpose: Create application-level resources — EC2, EKS, RDS, ALB, NLB,
+//          SQS, SNS, EventBridge, ECR, Secrets Manager — for a child account.
+// Must run AFTER network-infra pipeline.
+
+pipeline {
+  agent any
+
+  parameters {
+    string(name: 'ACCOUNT_ID',  description: 'AWS Account ID')
+    string(name: 'ENVIRONMENT', description: 'nonprod | prod | dr')
+    string(name: 'APP_ID',      description: 'Application identifier')
+  }
+
+  environment {
+    TF_PLUGIN_CACHE_DIR = '/var/jenkins_home/terraform-plugin-cache'
+    AWS_DEFAULT_REGION  = 'us-east-1'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        git branch: 'main',
+            credentialsId: 'github-token',
+            url: "https://github.com/${env.GITHUB_ORG}/app-${env.APP_ID}.git"
+      }
+    }
+
+    stage('Terraform Init') {
+      steps {
+        sh '''
+          mkdir -p $TF_PLUGIN_CACHE_DIR
+          terraform init \
+            -backend-config="bucket=aft-terraform-state" \
+            -backend-config="key=app-infra/${ENVIRONMENT}/${ACCOUNT_ID}/terraform.tfstate" \
+            -backend-config="region=${AWS_DEFAULT_REGION}"
+        '''
+      }
+    }
+
+    stage('Checkov Scan + Tag Validation') {
+      steps {
+        sh '''
+          checkov -d . --output json --compact --quiet
+          checkov -d . --check CKV_AWS_RESOURCE_TAGS --output json --compact
+        '''
+      }
+    }
+
+    stage('Terraform Plan') {
+      steps {
+        sh '''
+          terraform plan \
+            -var="account_id=${ACCOUNT_ID}" \
+            -var="environment=${ENVIRONMENT}" \
+            -var="app_id=${APP_ID}" \
+            -var-file="tags.tfvars" \
+            -out=tfplan
+        '''
+      }
+    }
+
+    stage('Terraform Apply') {
+      steps {
+        sh 'terraform apply -auto-approve tfplan'
+      }
+    }
+  }
+
+  post {
+    success {
+      script { currentBuild.description = "account_id=${env.ACCOUNT_ID}" }
+      echo "App infra created for account ${ACCOUNT_ID} (${APP_ID}) in ${ENVIRONMENT}."
+    }
+    failure {
+      echo "App infra pipeline failed for account ${ACCOUNT_ID}."
+    }
+  }
+}

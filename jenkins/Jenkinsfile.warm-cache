@@ -1,0 +1,149 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Terraform Provider Cache Warm-up Pipeline
+//
+// PURPOSE:
+//   Run this job ONCE after Jenkins is set up — before any real pipeline runs.
+//   Downloads the AWS Terraform provider into the shared plugin cache directory
+//   on the Jenkins agent so every subsequent pipeline (log-account, tgw,
+//   network-infra, app-infra) reuses the cached binary instead of downloading
+//   it fresh from the Terraform registry on every run.
+//
+// HOW TO USE:
+//   1. Add this as a Jenkins pipeline job called "terraform-warm-cache"
+//   2. Run it once manually after Jenkins agent setup
+//   3. Never needs to run again unless:
+//        - The Jenkins agent is rebuilt / cache directory is wiped
+//        - You upgrade to a new major AWS provider version
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
+pipeline {
+  agent any
+
+  environment {
+    TF_PLUGIN_CACHE_DIR = '/var/jenkins_home/terraform-plugin-cache'
+  }
+
+  stages {
+
+    stage('Verify Terraform Installed') {
+      steps {
+        sh '''
+          echo "Checking Terraform version..."
+          terraform version
+          echo ""
+          echo "Cache directory: $TF_PLUGIN_CACHE_DIR"
+        '''
+      }
+    }
+
+    stage('Create Cache Directory') {
+      steps {
+        sh '''
+          echo "Creating cache directory if it does not exist..."
+          mkdir -p $TF_PLUGIN_CACHE_DIR
+          ls -lah $TF_PLUGIN_CACHE_DIR
+        '''
+      }
+    }
+
+    stage('Checkout') {
+      steps {
+        git branch: 'main',
+            credentialsId: 'github-token',
+            url: "https://github.com/${env.GITHUB_ORG}/mcp-infra-server.git"
+      }
+    }
+
+    stage('Warm Provider Cache') {
+      steps {
+        sh '''
+          echo "============================================================"
+          echo " Downloading AWS Terraform provider into shared cache..."
+          echo "============================================================"
+
+          cd setup/terraform
+
+          # terraform init downloads the provider into TF_PLUGIN_CACHE_DIR
+          # -backend=false means no state backend needed for this warm-up
+          terraform init \
+            -backend=false \
+            -input=false \
+            -no-color
+
+          echo ""
+          echo "terraform init complete — provider is now cached."
+        '''
+      }
+    }
+
+    stage('Verify Cache Contents') {
+      steps {
+        sh '''
+          echo "============================================================"
+          echo " Verifying cached provider binary..."
+          echo "============================================================"
+          echo ""
+
+          if find $TF_PLUGIN_CACHE_DIR -name "terraform-provider-aws_*" -type f | grep -q .; then
+            echo "SUCCESS: AWS provider found in cache:"
+            find $TF_PLUGIN_CACHE_DIR -name "terraform-provider-aws_*" -type f
+            echo ""
+            echo "Cache directory contents:"
+            find $TF_PLUGIN_CACHE_DIR -type f | sed "s|$TF_PLUGIN_CACHE_DIR/||"
+            echo ""
+            echo "Total cache size:"
+            du -sh $TF_PLUGIN_CACHE_DIR
+          else
+            echo "ERROR: AWS provider binary not found in $TF_PLUGIN_CACHE_DIR"
+            echo "Check that the directory is writable by the Jenkins agent user."
+            exit 1
+          fi
+        '''
+      }
+    }
+
+  }
+
+  post {
+    success {
+      echo """
+============================================================
+ CACHE WARM-UP COMPLETE
+============================================================
+
+ The AWS Terraform provider is now cached at:
+   ${env.TF_PLUGIN_CACHE_DIR}
+
+ All pipelines will reuse this cached provider:
+   - log-account-pipeline
+   - tgw-pipeline
+   - network-infra-pipeline
+   - app-infra-pipeline
+
+ No pipeline will re-download the provider from scratch.
+
+ You do NOT need to run this job again unless:
+   - The Jenkins agent cache directory is wiped
+   - You upgrade to a new major AWS provider version
+============================================================
+      """
+    }
+    failure {
+      echo """
+============================================================
+ CACHE WARM-UP FAILED
+============================================================
+
+ Possible causes:
+   1. Terraform not installed on the Jenkins agent
+   2. Cache directory not writable: ${env.TF_PLUGIN_CACHE_DIR}
+   3. No internet access from Jenkins agent to registry.terraform.io
+   4. setup/terraform/versions.tf missing from the repo
+
+ Fix the issue above and re-run this job.
+============================================================
+      """
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "required_tags": [
+    "AccountId",
+    "AccountName",
+    "AppId",
+    "ApplicationType",
+    "Environment",
+    "Manager",
+    "CostCenter",
+    "BusinessUnit",
+    "Department",
+    "Project",
+    "Owner",
+    "CreatedBy",
+    "CreatedDate",
+    "LastModifiedBy",
+    "LastModifiedDate",
+    "Compliance",
+    "DataClassification",
+    "BackupPolicy",
+    "MonitoringLevel",
+    "PatchGroup",
+    "SupportTeam",
+    "Region",
+    "Terraform",
+    "TerraformModuleVersion"
+  ],
+  "count": 24,
+  "note": "All 24 tags must be present on every resource at creation time. Checkov will block any pipeline where a resource is missing one or more of these tags."
+}

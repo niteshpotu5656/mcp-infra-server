@@ -1,0 +1,72 @@
+// Log Account Pipeline
+// Purpose: Register new account ID + ARN so VPC flow logs route to Log Account S3.
+// Must run BEFORE network-infra pipeline.
+
+pipeline {
+  agent any
+
+  parameters {
+    string(name: 'ACCOUNT_ID', description: 'AWS Account ID of the new account')
+  }
+
+  environment {
+    TF_PLUGIN_CACHE_DIR = '/var/jenkins_home/terraform-plugin-cache'
+    AWS_DEFAULT_REGION  = 'us-east-1'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        git branch: 'main',
+            credentialsId: 'github-token',
+            url: "https://github.com/${env.GITHUB_ORG}/network-infra.git"
+      }
+    }
+
+    stage('Terraform Init') {
+      steps {
+        withCredentials([string(credentialsId: 'vault-token', variable: 'VAULT_TOKEN')]) {
+          sh '''
+            mkdir -p $TF_PLUGIN_CACHE_DIR
+            terraform init \
+              -backend-config="bucket=aft-terraform-state" \
+              -backend-config="key=log-account/${ACCOUNT_ID}/terraform.tfstate" \
+              -backend-config="region=${AWS_DEFAULT_REGION}"
+          '''
+        }
+      }
+    }
+
+    stage('Checkov Scan') {
+      steps {
+        sh 'checkov -d . --output json --compact --quiet'
+      }
+    }
+
+    stage('Terraform Plan') {
+      steps {
+        sh '''
+          terraform plan \
+            -var="account_id=${ACCOUNT_ID}" \
+            -out=tfplan
+        '''
+      }
+    }
+
+    stage('Terraform Apply') {
+      steps {
+        sh 'terraform apply -auto-approve tfplan'
+      }
+    }
+  }
+
+  post {
+    success {
+      // Tag build description with account ID so MCP pre-check can detect it
+      script { currentBuild.description = "account_id=${env.ACCOUNT_ID}" }
+    }
+    failure {
+      echo "Log account pipeline failed for account ${ACCOUNT_ID}. Check logs above."
+    }
+  }
+}

@@ -1,0 +1,61 @@
+// Module Version Checker — runs weekly via Jenkins cron
+// Purpose: Scan the modules repo for new versions, auto-tag, and notify team via GitHub Issue.
+
+pipeline {
+  agent any
+
+  triggers {
+    // Runs every Monday at 08:00
+    cron('0 8 * * 1')
+  }
+
+  environment {
+    PYTHONUNBUFFERED = '1'
+  }
+
+  stages {
+    stage('Check Module Versions') {
+      steps {
+        withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
+          sh '''
+            cd /opt/mcp-infra-server
+            python -c "
+from scheduler.module_version_checker import register_scheduler_tools
+from mcp.server.fastmcp import FastMCP
+import json
+
+mcp = FastMCP('version-checker')
+register_scheduler_tools(mcp)
+
+# Check for new version
+result = mcp._tool_map['module_check_versions']()
+print(json.dumps(result, indent=2))
+
+if result.get('new_version_available'):
+    # Create new tag
+    tag_result = mcp._tool_map['module_create_next_tag'](bump='patch')
+    print(json.dumps(tag_result, indent=2))
+
+    # Notify team
+    notify_result = mcp._tool_map['module_notify_update'](
+        latest_tag=tag_result['new_tag'],
+        previous_tag=tag_result['previous_tag'],
+        changed_files=result.get('changed_files', []),
+        commits=result.get('commits', []),
+    )
+    print(json.dumps(notify_result, indent=2))
+else:
+    print('No new module version detected.')
+"
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    failure {
+      echo "Module version checker failed — check logs."
+    }
+  }
+}
