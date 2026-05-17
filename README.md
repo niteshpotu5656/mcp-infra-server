@@ -1,6 +1,8 @@
 # MCP Infrastructure Automation Server
 
-An MCP (Model Context Protocol) server that connects to Claude and automates the full end-to-end AWS infrastructure creation workflow — from account creation through pipeline orchestration to live inventory sync.
+An MCP (Model Context Protocol) server that connects to Claude Desktop and automates the full end-to-end AWS infrastructure creation workflow — from account creation through pipeline orchestration to live inventory sync.
+
+> **Status:** Live and connected. 35 tools running. All services verified.
 
 ---
 
@@ -31,10 +33,10 @@ App Team
 GitHub Issue (infra request)
    │
    ▼
-Claude + MCP Server
+Claude Desktop + MCP Server (35 tools)
    │
    ├── GitHub Tools       → issues, PRs, file commits, version tags
-   ├── AWS Tools          → account creation via AFT (Organizations API)
+   ├── AWS Tools          → account creation (POC: single account / Prod: AFT Organizations)
    ├── Jenkins Tools      → trigger & monitor all pipelines
    ├── Checkov Tools      → compliance scanning + 24-tag validation
    ├── Netbox Tools       → live CMDB inventory
@@ -64,25 +66,32 @@ Claude + MCP Server
 | Purpose | Tool |
 |---|---|
 | Ticketing / Requests | GitHub Issues |
-| Code & Terraform Modules | GitHub |
-| CI/CD Pipelines | Jenkins |
+| Code & Terraform Modules | GitHub (personal account or org) |
+| CI/CD Pipelines | Jenkins (Docker container) |
 | Compliance & Tag Scanning | Checkov |
-| Secrets Management | HashiCorp Vault |
-| Live Inventory / CMDB | AWS Config + Netbox |
-| Terraform Provider Cache | `TF_PLUGIN_CACHE_DIR` on Jenkins agent |
+| Secrets Management | HashiCorp Vault (Docker container) |
+| Live Inventory / CMDB | Netbox (Docker container) |
+| Terraform Provider Cache | Shared `TF_PLUGIN_CACHE_DIR` on Jenkins agent |
+| MCP Runtime | Python 3.13 + FastMCP |
 
 ---
 
 ## AWS Account Structure
 
+### Production (full multi-account)
+
 | Account | Role |
 |---|---|
-| OU (Master) | Manages all 131 child accounts, enforces SCPs, Identity Center |
-| AFT | All Terraform operations run from here; holds all S3 state files |
+| OU (Master) | Manages all child accounts, enforces SCPs, Identity Center |
+| AFT | All Terraform operations; holds all S3 state files |
 | Shared Services | Firewall, proxy, Route 53, Transit Gateway |
 | Prod Shared Services | Custom AMIs, private repos — auto-shared to new accounts |
-| Security | Guardduty, antivirus, ServiceNow |
+| Security | Guardduty, antivirus |
 | Log Account | Centralised VPC flow logs from all accounts |
+
+### POC Mode (single account)
+
+Set `POC_MODE=true` in your `.env` to bypass AFT account creation and use a single existing AWS account with static access keys. All other tools (GitHub, Jenkins, Netbox, Vault, Checkov) run fully in POC mode.
 
 ---
 
@@ -90,19 +99,20 @@ Claude + MCP Server
 
 ```
 mcp-infra-server/
-├── server.py                               # MCP server entry point — registers all tools
-├── config.py                               # All credentials loaded from env vars
+├── server.py                               # MCP entry point — registers all 35 tools
+├── config.py                               # Credentials loaded from env vars + POC_MODE flag
 ├── requirements.txt                        # Python dependencies
-├── claude_mcp_config.json                  # Claude Code MCP connection config
-├── .env.example                            # Environment variable template — copy to .env
+├── claude_mcp_config.json                  # Template for Claude Desktop MCP config
+├── .env.example                            # Environment variable template
+├── .env                                    # Your real credentials — never committed
 │
-├── tools/                                  # 33 MCP tools across 6 categories
-│   ├── github_tools.py                     # 9 tools — issue, PR, file, branch, tag
-│   ├── jenkins_tools.py                    # 6 tools — trigger, poll, pre-check, logs
-│   ├── aws_tools.py                        # 4 tools — account creation via AFT
-│   ├── checkov_tools.py                    # 4 tools — compliance scan + 24-tag validation
-│   ├── netbox_tools.py                     # 4 tools — CMDB registration and query
-│   └── vault_tools.py                      # 4 tools — secret fetch, store, list
+├── tools/                                  # 35 MCP tools across 6 categories
+│   ├── github_tools.py                     # 10 tools — issue, PR, file, branch, tag
+│   ├── jenkins_tools.py                    #  6 tools — trigger, poll, pre-check, logs
+│   ├── aws_tools.py                        #  4 tools — account creation (POC + prod)
+│   ├── checkov_tools.py                    #  4 tools — compliance scan + 24-tag validation
+│   ├── netbox_tools.py                     #  4 tools — CMDB registration and query
+│   └── vault_tools.py                      #  4 tools — secret fetch, store, list, check
 │
 ├── workflows/                              # Phase orchestration logic
 │   ├── pre_infra.py                        # Phase 1 — account creation orchestration
@@ -113,7 +123,7 @@ mcp-infra-server/
 │   └── module_version_checker.py           # 3 tools — weekly version scan + auto-tag + notify
 │
 ├── jenkins/                                # Jenkinsfile for every pipeline
-│   ├── Jenkinsfile.warm-cache              # Run ONCE first — pre-warms provider cache
+│   ├── Jenkinsfile.warm-cache              # Run ONCE — pre-warms Terraform provider cache
 │   ├── Jenkinsfile.log-account             # Pipeline 1 — log account registration
 │   ├── Jenkinsfile.tgw                     # Pipeline 2 — Transit Gateway
 │   ├── Jenkinsfile.network-infra           # Pipeline 3 — VPC, subnets, NAT, KMS, SGs
@@ -123,12 +133,17 @@ mcp-infra-server/
 ├── lambda/
 │   └── netbox_sync.py                      # Lambda — AWS Config → EventBridge → Netbox
 │
-├── setup/                                  # One-time setup scripts
-│   ├── vault/vault_setup.py                # Initialise all Vault secrets
-│   ├── netbox/netbox_setup.py              # Create Netbox custom fields
+├── setup/
+│   ├── docker/
+│   │   ├── docker-compose.yml              # Spins up Jenkins + Netbox + Vault
+│   │   ├── configure_all.py                # Auto-configures all 3 services + writes .env
+│   │   └── netbox-config/
+│   │       └── extra.py                    # Netbox 4.6 API_TOKEN_PEPPERS config
+│   ├── vault/vault_setup.py                # Seeds all secrets into Vault
+│   ├── netbox/netbox_setup.py              # Creates Netbox custom fields
 │   ├── aws/main.tf                         # Terraform — EventBridge + Lambda + AWS Config
 │   └── terraform/
-│       ├── versions.tf                     # Minimal config declaring all providers
+│       ├── versions.tf                     # Minimal config for provider cache warm-up
 │       └── warm_provider_cache.sh          # Downloads AWS provider into cache once
 │
 ├── templates/
@@ -138,212 +153,183 @@ mcp-infra-server/
     └── test_e2e.py                         # Full test suite — all 3 phases + cache + tags
 ```
 
-> The architecture diagram is saved at `../architecture.png` (root of the repo).
-> To regenerate it run `python ../generate_architecture.py`.
+---
+
+## GitHub Repositories
+
+All repos live under your GitHub account. Created automatically by `setup/github/create_repos_and_modules.py`.
+
+| Repo | Contents | Tag |
+|---|---|---|
+| `modules` | 19 Terraform modules (9 network + 10 app) | `v1.0.0` |
+| `network-infra` | Network Terraform configs per account/env | — |
+| `checkov-configs` | Per-account Checkov compliance files | — |
+| `infra-requests` | GitHub Issues for infra requests | — |
+| `mcp-infra-server` | This repo — MCP server code | — |
 
 ---
 
 ## Prerequisites
 
-Before running the MCP server, the following must be set up manually:
-
 | Requirement | Notes |
 |---|---|
-| GitHub Organisation & PAT | PAT needs `repo`, `issues`, `admin:org` scopes |
-| Jenkins server running | All 5 Jenkinsfiles added as pipeline jobs |
-| Jenkins agent with Terraform + Checkov installed | `TF_PLUGIN_CACHE_DIR` directory must exist and be writable |
-| HashiCorp Vault instance | KV v2 secrets engine enabled at `secret/infra` |
-| Netbox instance | Custom fields created via `setup/netbox/netbox_setup.py` |
-| AWS AFT account | `MCPAutomationRole` IAM role with Organizations + STS permissions |
-| AWS Config enabled | Across all child accounts — deploy via `setup/aws/main.tf` |
-| AWS RAM sharing enabled | In Shared Services account for TGW re-sharing |
-| Python 3.12+ | On the machine running the MCP server |
+| Docker Desktop | For running Jenkins, Netbox, and Vault locally |
+| Python 3.12+ | For the MCP server process |
+| Claude Desktop | App that connects to the MCP server |
+| GitHub account + PAT | Classic PAT with `repo` scope |
+| AWS account + IAM user | Access key + secret key (POC: any account; Prod: AFT account with MCPAutomationRole) |
 
 ---
 
-## Setup
+## Quick Start
 
 ### 1. Clone and install dependencies
 
 ```bash
-git clone https://github.com/your-org/mcp-infra-server.git
+git clone https://github.com/niteshpotu5656/mcp-infra-server.git
 cd mcp-infra-server
 pip install -r requirements.txt
 ```
 
-### 2. Configure environment variables
+### 2. Start all services with Docker
 
 ```bash
-cp .env.example .env
-# Fill in all values — GitHub, Jenkins, AWS, Netbox, Vault
+cd setup/docker
+docker compose up -d
 ```
 
-### 3. Initialise Vault secrets
+This starts:
+- **Jenkins** at `http://localhost:8080`
+- **Netbox** at `http://localhost:8000`
+- **Vault** at `http://localhost:8200` (dev mode, token: `root`)
+
+### 3. Configure all services automatically
 
 ```bash
-python setup/vault/vault_setup.py
+python setup/docker/configure_all.py
 ```
 
-This reads values from your `.env` and stores them all in Vault under `secret/infra/`.
+This script:
+- Creates Jenkins admin user and generates an API token
+- Verifies the Netbox API token
+- Enables Vault KV v2 and seeds all secret paths
+- Writes all generated credentials into `.env`
 
-### 4. Initialise Netbox custom fields
+### 4. Fill in the remaining `.env` values
 
 ```bash
-python setup/netbox/netbox_setup.py
+# Open .env and fill in the AWS section:
+AWS_ACCESS_KEY_ID=your_access_key
+AWS_SECRET_ACCESS_KEY=your_secret_key
+AWS_ACCOUNT_ID=your_12_digit_account_id
+
+# For production (multi-account), also fill in:
+AWS_AFT_ACCOUNT_ID=...
+AWS_LOG_ACCOUNT_ID=...
+AWS_SHARED_SERVICES_ACCOUNT_ID=...
 ```
 
-Creates the 6 custom fields required by the MCP (account_id, app_id, manager, application_type, environment, account_name).
-
-### 5. Deploy AWS Config + EventBridge + Lambda (live sync)
+### 5. Create GitHub repos and push all Terraform modules
 
 ```bash
-cd setup/aws
-
-# Package the Lambda function
-zip netbox_sync.zip ../../lambda/netbox_sync.py
-
-terraform init
-terraform apply \
-  -var="netbox_url=http://your-netbox-url:8000" \
-  -var="netbox_token=your_netbox_token"
+python setup/github/create_repos_and_modules.py
 ```
 
-This deploys:
-- **AWS Config recorder** — detects every resource change across child accounts
-- **EventBridge rule** — fires on every Config change event
-- **Lambda function** (`netbox_sync.py`) — syncs the change into Netbox automatically
+Creates all 5 repos and pushes 19 Terraform modules tagged at `v1.0.0`.
 
-### 6. Configure Jenkins pipelines
+### 6. Install Terraform on Jenkins and warm the provider cache
 
-Create the following pipeline jobs in Jenkins using the Jenkinsfiles in the `jenkins/` folder:
+```bash
+# Install Terraform inside the Jenkins container
+docker exec -u root mcp-jenkins bash -c "
+  apt-get update -qq && apt-get install -y -qq wget unzip && \
+  wget -q https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip && \
+  unzip -q terraform_1.7.5_linux_amd64.zip && mv terraform /usr/local/bin/ && \
+  rm terraform_1.7.5_linux_amd64.zip
+"
 
-| Jenkins Job Name | Jenkinsfile | Run Order |
+# Warm the provider cache (downloads AWS provider ~675MB — once only)
+docker cp setup/terraform/versions.tf mcp-jenkins:/tmp/versions.tf
+docker exec -u root mcp-jenkins bash -c "
+  mkdir -p /tmp/tf-warm && cp /tmp/versions.tf /tmp/tf-warm/ && \
+  cd /tmp/tf-warm && \
+  TF_PLUGIN_CACHE_DIR=/var/jenkins_home/terraform-plugin-cache \
+  terraform init -backend=false -input=false -no-color
+"
+```
+
+After this, all pipelines reuse the cached provider — **zero downloads** per run.
+
+> **Already done?** The provider cache persists in a Docker volume (`jenkins_cache`). It survives container restarts. Only re-run if you rebuild the volume or upgrade the provider version.
+
+### 7. Configure Jenkins pipeline jobs
+
+Create the following pipeline jobs in Jenkins (`http://localhost:8080`):
+
+| Jenkins Job Name | Jenkinsfile | Purpose |
 |---|---|---|
-| `terraform-warm-cache` | `Jenkinsfile.warm-cache` | **Run once first** — pre-warms provider cache |
+| `terraform-warm-cache` | `Jenkinsfile.warm-cache` | One-time provider cache warm-up |
 | `log-account-pipeline` | `Jenkinsfile.log-account` | Pipeline 1 |
 | `tgw-pipeline` | `Jenkinsfile.tgw` | Pipeline 2 |
 | `network-infra-pipeline` | `Jenkinsfile.network-infra` | Pipeline 3 |
 | `app-infra-pipeline` | `Jenkinsfile.app-infra` | Pipeline 4 |
-| `module-version-checker` | `Jenkinsfile.module-version-checker` | Weekly cron |
+| `module-version-checker` | `Jenkinsfile.module-version-checker` | Weekly cron (Mon 08:00) |
 
-Additional Jenkins setup:
-- Set module version checker cron trigger to `0 8 * * 1` (every Monday 08:00)
-- Add Jenkins credentials:
-  - `github-token` — GitHub PAT
-  - `vault-token` — HashiCorp Vault token
+Add Jenkins credentials:
+- `github-token` — GitHub PAT
+- `vault-token` — Vault root token (`root` in dev mode)
 
-### 7. Pre-warm the Terraform provider cache
+### 8. Connect to Claude Desktop
 
-**Run the `terraform-warm-cache` Jenkins job once** before triggering any real pipeline.
-
-This downloads the AWS provider into the shared cache directory on the Jenkins agent so all pipelines reuse it instead of downloading it fresh every run.
-
-```bash
-# Or run manually on the Jenkins agent:
-bash setup/terraform/warm_provider_cache.sh
-```
-
-You only need to re-run this if:
-- The Jenkins agent is rebuilt and the cache directory is wiped
-- You upgrade to a new major AWS provider version
-
-> Without this step, the first pipeline run for every account will still download the provider. After the first run the cache kicks in. Running the warm-up job means **zero downloads** from the very first pipeline.
-
-### 8. Connect to Claude Code
-
-Copy `claude_mcp_config.json` into your Claude Code MCP settings (usually `~/.claude/claude_desktop_config.json`), filling in all placeholder values:
+1. Open Claude Desktop → **Settings → Developer → Edit Config**
+2. Add the `mcpServers` block to `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "mcp-infra-server": {
-      "command": "python",
-      "args": ["server.py"],
-      "cwd": "/path/to/mcp-infra-server",
+      "command": "C:\\Python313\\python.exe",
+      "args": ["H:\\path\\to\\mcp-infra-server\\server.py"],
       "env": {
-        "GITHUB_TOKEN":                   "your_github_pat",
-        "GITHUB_ORG":                     "your_org",
-        "JENKINS_URL":                    "http://your-jenkins:8080",
-        "JENKINS_USER":                   "your_user",
-        "JENKINS_TOKEN":                  "your_token",
-        "AWS_AFT_ACCOUNT_ID":             "123456789012",
-        "AWS_LOG_ACCOUNT_ID":             "123456789013",
-        "AWS_SHARED_SERVICES_ACCOUNT_ID": "123456789014",
-        "NETBOX_URL":                     "http://your-netbox:8000",
-        "NETBOX_TOKEN":                   "your_netbox_token",
-        "VAULT_URL":                      "http://your-vault:8200",
-        "VAULT_TOKEN":                    "your_vault_token"
+        "POC_MODE":                        "true",
+        "GITHUB_TOKEN":                    "your_github_pat",
+        "GITHUB_ORG":                      "your_github_username",
+        "GITHUB_MODULES_REPO":             "modules",
+        "GITHUB_NETWORK_REPO":             "network-infra",
+        "GITHUB_INFRA_REPO":               "infra-requests",
+        "JENKINS_URL":                     "http://localhost:8080",
+        "JENKINS_USER":                    "admin",
+        "JENKINS_TOKEN":                   "your_jenkins_token",
+        "AWS_REGION":                      "us-east-1",
+        "AWS_ACCESS_KEY_ID":               "your_access_key",
+        "AWS_SECRET_ACCESS_KEY":           "your_secret_key",
+        "AWS_ACCOUNT_ID":                  "123456789012",
+        "AWS_AFT_ACCOUNT_ID":              "123456789012",
+        "AWS_LOG_ACCOUNT_ID":              "123456789012",
+        "AWS_SHARED_SERVICES_ACCOUNT_ID":  "123456789012",
+        "NETBOX_URL":                      "http://localhost:8000",
+        "NETBOX_TOKEN":                    "your_netbox_token",
+        "VAULT_URL":                       "http://localhost:8200",
+        "VAULT_TOKEN":                     "root",
+        "VAULT_SECRET_PATH":               "secret/infra",
+        "CHECKOV_REPO_PATH":               "H:\\path\\to\\checkov\\configs",
+        "PYTHONPATH":                      "H:\\path\\to\\mcp-infra-server"
       }
     }
   }
 }
 ```
 
-Once saved, restart Claude Code — it will discover all 33 MCP tools automatically.
+> **Important:** Use the **full path** to `python.exe` and `server.py` — relative paths don't work because Claude Desktop launches from `system32`.
 
----
-
-## How the Workflow Runs
-
-### Step 1 — App team raises a GitHub Issue
-
-The issue must include all of the following fields:
-
-| Field | Description |
-|---|---|
-| Account Name | Name for the new AWS account |
-| App ID | Application identifier |
-| Manager | Approving manager's name |
-| Application Type | Type of application (microservice, data platform, etc.) |
-| Environment | `nonprod`, `prod`, or `dr` |
-| VPC CIDR | Required IP range e.g. `10.0.0.0/16` |
-| Budget Approval Link | Link to approved budget document |
-| Architecture Doc Link | Link to approved architecture document |
-
-### Step 2 — Manager approves
-
-Manager adds the `approved` label to the GitHub Issue. Claude polls for this via `github_check_approval` before doing anything else.
-
-### Step 3 — Claude runs pre-infra
-
-```
-Approval confirmed
-    → AWS account created via AFT (AWS Organizations API)
-    → Account placed in correct OU (nonprod / prod / DR)
-    → Account registered in Netbox with all metadata
-    → Account ID and Netbox record ID posted back to GitHub Issue
-```
-
-### Step 4 — Claude runs infra pipelines in strict order
-
-Each step has a pre-check. If a step already ran for this account it is skipped automatically — safe to re-run at any time.
-
-```
-1. Log Account Pipeline     → registers account ARN so VPC flow logs route to Log Account S3
-        ↓
-2. Checkov Account File     → creates compliance config, validates 24 mandatory tags
-        ↓
-3. TGW Pipeline             → creates TGW in Shared Services, re-shares to new account
-                              configures static routes + propagation
-        ↓
-4. Network Infra Pipeline   → VPC · subnets · NAT · KMS · SGs · SSM · VPCE · flow logs
-                              (Terraform config committed to GitHub, PR raised, merged, then applied)
-        ↓
-5. App Infra Pipeline       → EC2 · EKS · RDS · ALB · NLB · SQS · SNS · ECR · Secrets Manager
-                              (same GitHub PR flow as network infra)
-```
-
-If any pipeline fails, Claude fetches the console logs, posts them directly to the GitHub Issue, and stops. No further steps run until the issue is resolved and the workflow is re-triggered.
-
-### Step 5 — Post-infra
-
-AWS Config continuously detects all resource changes and syncs them to Netbox via Lambda — no manual step needed. Claude reads the Netbox record, posts a full resource summary to the GitHub Issue, and closes it.
+3. **Fully quit Claude Desktop** (system tray → Quit) and reopen it
+4. Go to **Settings → Developer** — you should see `mcp-infra-server` with a blue **running** badge
 
 ---
 
 ## Terraform Provider Cache
 
-All Jenkinsfiles set `TF_PLUGIN_CACHE_DIR` to a shared persistent directory on the Jenkins agent:
+All Jenkinsfiles set `TF_PLUGIN_CACHE_DIR` to the same shared persistent directory:
 
 ```groovy
 environment {
@@ -351,13 +337,102 @@ environment {
 }
 ```
 
-This means the AWS provider is downloaded **once** and reused across all 131 account pipelines. Without this, every pipeline re-downloads the provider from scratch.
+```
+/var/jenkins_home/terraform-plugin-cache/
+  └── registry.terraform.io/hashicorp/aws/5.100.0/linux_amd64/
+        └── terraform-provider-aws_v5.100.0_x5   (675 MB)
+```
+
+**How it's shared:**
+
+```
+One cached binary (675 MB, downloaded once)
+         │
+         ├── log-account-pipeline  → Account A
+         ├── tgw-pipeline          → Account A, B, C...
+         ├── network-infra-pipeline → All accounts
+         └── app-infra-pipeline    → All accounts, all apps
+```
+
+No pipeline ever re-downloads the provider. The cache persists in the `jenkins_cache` Docker volume and survives container restarts.
+
+---
+
+## POC Mode
+
+Set `POC_MODE=true` to run against a single existing AWS account instead of the full AFT multi-account setup:
+
+| Behaviour | POC Mode | Production Mode |
+|---|---|---|
+| `aws_create_account` | Returns existing account ID immediately | Creates real account via Organizations API |
+| `aws_check_account_active` | Verifies credentials via STS | Checks Organizations account status |
+| `aws_get_account_details` | Returns STS caller identity | Queries Organizations API |
+| AWS authentication | Static access key + secret key | `assume_role` to `MCPAutomationRole` in AFT account |
+| All other tools | Run fully (GitHub, Jenkins, Netbox, Vault, Checkov) | Run fully |
+
+To switch to production mode: set `POC_MODE=false` and fill in the real AFT/Log/Shared Services account IDs.
+
+---
+
+## How the Workflow Runs
+
+### Step 1 — App team raises a GitHub Issue
+
+The issue must include:
+
+| Field | Description |
+|---|---|
+| Account Name | Name for the new AWS account |
+| App ID | Application identifier |
+| Manager | Approving manager's name |
+| Application Type | Type (microservice, data platform, etc.) |
+| Environment | `nonprod`, `prod`, or `dr` |
+| VPC CIDR | Required IP range e.g. `10.0.0.0/16` |
+| Budget Approval Link | Link to approved budget document |
+| Architecture Doc Link | Link to approved architecture document |
+
+### Step 2 — Manager approves
+
+Manager adds the `approved` label to the GitHub Issue. Claude polls via `github_check_approval` before proceeding.
+
+### Step 3 — Claude runs pre-infra
+
+```
+Approval confirmed
+    → AWS account created (or bypassed in POC mode)
+    → Account registered in Netbox with all metadata
+    → Account ID and Netbox record posted back to GitHub Issue
+```
+
+### Step 4 — Claude runs infra pipelines in strict order
+
+Each step has a pre-check — if it already ran for this account it is skipped automatically.
+
+```
+1. Log Account Pipeline     → registers account ARN for centralised VPC flow logs
+        ↓
+2. Checkov Account File     → creates compliance config, validates 24 mandatory tags
+        ↓
+3. TGW Pipeline             → Transit Gateway in Shared Services, re-shared to new account
+        ↓
+4. Network Infra Pipeline   → VPC · subnets · NAT · KMS · SGs · SSM · VPCE · flow logs
+                              (Terraform committed to GitHub → PR raised → merged → applied)
+        ↓
+5. App Infra Pipeline       → EC2 · EKS · RDS · ALB · NLB · SQS · SNS · ECR · Secrets Manager
+                              (same GitHub PR flow)
+```
+
+If any pipeline fails, Claude fetches the console logs, posts them to the GitHub Issue, and stops.
+
+### Step 5 — Post-infra
+
+AWS Config syncs all resources to Netbox via Lambda automatically. Claude reads the Netbox record, posts a full resource summary, and closes the GitHub Issue.
 
 ---
 
 ## 24 Mandatory Tags
 
-Every resource must have all 24 tags at creation time. Checkov validates this before every pipeline run and blocks if any tag is missing. The full tag list is defined in `templates/tags.json`:
+Every resource must have all 24 tags. Checkov validates this before every pipeline and blocks if any tag is missing:
 
 ```
 AccountId, AccountName, AppId, ApplicationType, Environment, Manager,
@@ -367,57 +442,35 @@ BackupPolicy, MonitoringLevel, PatchGroup, SupportTeam, Region,
 Terraform, TerraformModuleVersion
 ```
 
+Full definition in `templates/tags.json`.
+
 ---
 
 ## Module Version Management
 
-A Jenkins cron job runs every Monday at 08:00 and:
+A Jenkins cron runs every Monday at 08:00 and:
 
 1. Scans the `modules` repo for changes since the last Git tag
-2. If changes are detected — creates the next semantic version tag automatically (e.g. `v1.2.3` → `v1.2.4`)
-3. Raises a GitHub Issue listing what changed, which files were modified, and which pipelines are still on the old version
-
-The team reviews the issue and updates pipeline tag references accordingly.
+2. If changes detected — auto-creates the next semver tag (`v1.2.3` → `v1.2.4`)
+3. Raises a GitHub Issue listing what changed and which pipelines need updating
 
 ---
 
 ## Live Inventory Sync
 
-Netbox is kept live automatically — no manual updates needed:
-
 ```
-Resource created / modified / deleted in any of the 131 AWS accounts
+Resource created / modified / deleted in AWS
     → AWS Config detects the change
     → EventBridge rule fires
     → Lambda (lambda/netbox_sync.py) calls Netbox API
     → Netbox record updated in real time
 ```
 
-Netbox tracks per account: AWS Account ID, Account Name, App ID, Manager, Application Type, Environment, and all resources with their current state.
+Deploy the Lambda + EventBridge + AWS Config via `setup/aws/main.tf`.
 
 ---
 
-## Running Tests
-
-```bash
-# Unit tests — mocked services, no real AWS/Jenkins calls
-python -m pytest tests/test_e2e.py -v
-
-# Integration tests — runs against real services
-USE_REAL_SERVICES=true python -m pytest tests/test_e2e.py -v
-```
-
-Test coverage:
-- Pre-infra: approval check, account creation, Netbox registration
-- Infra pipeline: order enforcement, skip-if-already-ran, failure handling, PR flow
-- Post-infra: Netbox sync, issue closure
-- Provider cache: all Jenkinsfiles checked for `TF_PLUGIN_CACHE_DIR`
-- Tag validation: 24 tags verified in `tags.json`
-- Module version checker: semver bump logic, new version detection
-
----
-
-## MCP Tools Reference
+## MCP Tools Reference (35 tools)
 
 | Tool | Phase | Description |
 |---|---|---|
@@ -431,9 +484,9 @@ Test coverage:
 | `github_merge_pr` | Infra | Merge approved PR |
 | `github_create_tag` | Scheduler | Create new module version tag |
 | `github_get_latest_tag` | Scheduler | Get current module version |
-| `aws_create_account` | Pre | Create AWS account via AFT |
+| `aws_create_account` | Pre | Create AWS account (POC: returns existing) |
 | `aws_get_account_details` | Pre | Fetch account info |
-| `aws_check_account_active` | Pre | Verify account is active |
+| `aws_check_account_active` | Pre | Verify account is accessible |
 | `aws_get_account_arn` | Pre | Get account ARN for log pipeline |
 | `jenkins_trigger_pipeline` | Infra | Trigger a Jenkins pipeline |
 | `jenkins_get_pipeline_status` | Infra | Get build status |
@@ -459,13 +512,15 @@ Test coverage:
 
 ---
 
-## Access Rules
+## Running Tests
 
-- App teams have **read-only** access to their own application repo
-- App teams have **no access** to the `network-infra` repo, even for their own account
-- All Terraform state files are stored in the **AFT account S3 bucket**
-- The MCP server assumes `MCPAutomationRole` in the AFT account for all AWS operations
-- Vault holds all credentials — no secrets are stored in code or environment files in production
+```bash
+# Unit tests — all services mocked
+python -m pytest tests/test_e2e.py -v
+
+# Integration tests — runs against real services
+USE_REAL_SERVICES=true python -m pytest tests/test_e2e.py -v
+```
 
 ---
 
@@ -473,14 +528,28 @@ Test coverage:
 
 | Problem | Cause | Fix |
 |---|---|---|
-| Provider re-downloading every pipeline run | Cache not pre-warmed or directory missing | Run the `terraform-warm-cache` Jenkins job once, or run `bash setup/terraform/warm_provider_cache.sh` on the agent manually |
-| Pipeline blocked at Checkov step | Account file missing in `CHECKOV_REPO_PATH` | Run `checkov_create_account_file` tool first, then re-trigger |
-| TGW pipeline fails | RAM sharing not enabled in Shared Services account | Enable AWS RAM in Shared Services and confirm new account is in the same AWS Organisation |
-| Netbox not updating after resource change | EventBridge not routing to Lambda | Check CloudWatch logs for the Lambda — verify EventBridge rule ARN matches Lambda ARN |
-| Claude cannot discover MCP tools | Wrong `cwd` or missing env vars in MCP config | Check `claude_mcp_config.json` — all env vars must be filled in, `cwd` must be the absolute path to `mcp-infra-server/` |
-| Vault authentication error | Token expired or wrong | Re-run `setup/vault/vault_setup.py` with a fresh `VAULT_TOKEN` |
-| Account creation stuck in SUCCEEDED but inactive | AWS account activation delay | Wait 2–3 minutes and call `aws_check_account_active` again — new accounts take time to become fully active |
-| Network PR not auto-merging | PR has unresolved review requests | Approve the PR manually, then re-trigger the infra pipeline workflow |
+| `Server disconnected` in Claude Desktop | `server.py` path wrong | Use full absolute path in `args`, not just `"server.py"` |
+| `Could not load app settings` — invalid JSON | BOM in config file | Re-save `claude_desktop_config.json` using UTF-8 without BOM |
+| Provider re-downloading every pipeline run | Cache empty or Terraform not installed on Jenkins | Re-run the provider cache warm-up steps in Setup §6 |
+| Pipeline blocked at Checkov step | Account file missing | Run `checkov_create_account_file` tool first |
+| Netbox API returns `Invalid v1 token` | Netbox 4.6 requires `API_TOKEN_PEPPERS` | Ensure `setup/docker/netbox-config/extra.py` is mounted and container restarted |
+| Vault authentication error | Token expired | Vault dev mode resets on restart — token is always `root` in dev mode |
+| Jenkins `403 No valid crumb` | CSRF protection | Use a web session when calling Jenkins API — crumb and cookies must come from the same session |
+| Claude shows `No servers added` | Config not saved or preferences-only file | Ensure `mcpServers` key exists at root level in `claude_desktop_config.json` |
+| `ModuleNotFoundError` in server | `PYTHONPATH` not set | Add `"PYTHONPATH": "/full/path/to/mcp-infra-server"` to the MCP env config |
+| AWS `InvalidClientTokenId` | Wrong access key | Verify `AWS_ACCESS_KEY_ID` in `.env` matches what AWS Console shows |
+
+---
+
+## Service Credentials (Docker / Local)
+
+| Service | URL | Default Login |
+|---|---|---|
+| Jenkins | http://localhost:8080 | admin / admin |
+| Netbox | http://localhost:8000 | admin / admin123 |
+| Vault | http://localhost:8200 | token: `root` (dev mode) |
+
+> Vault dev mode resets on container restart. For production, use a properly initialised and unsealed Vault instance.
 
 ---
 
@@ -488,8 +557,7 @@ Test coverage:
 
 | Document | Location | Description |
 |---|---|---|
-| Full Plan | `../MCP_PLAN.md` | Complete architecture plan — all phases, tools, and design decisions |
-| Task Tracking | `../MCP_TRACKING.md` | 87 tasks across 13 chunks — tracks build progress |
+| Full Plan | `../MCP_PLAN.md` | Complete architecture plan — all phases, tools, design decisions |
+| Task Tracking | `../MCP_TRACKING.md` | 87 tasks across 13 chunks |
 | Architecture Diagram | `../architecture.png` | Visual diagram of the full workflow |
-| Diagram Generator | `../generate_architecture.py` | Run to regenerate `architecture.png` after changes |
-| Original Workflow Notes | `../OU_level.txt` | Original company workflow documentation used to design this MCP |
+| Diagram Generator | `../generate_architecture.py` | Run to regenerate after changes |
