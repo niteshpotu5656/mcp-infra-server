@@ -26,11 +26,17 @@ class Config:
     # Terraform provider cache — fix for provider re-download issue
     TF_PLUGIN_CACHE_DIR: str = os.getenv("TF_PLUGIN_CACHE_DIR", "/var/jenkins_home/terraform-plugin-cache")
 
+    # POC mode — skips AFT account creation, uses static AWS keys
+    POC_MODE: bool = os.getenv("POC_MODE", "false").lower() == "true"
+
     # AWS
     AWS_REGION: str = os.getenv("AWS_REGION", "us-east-1")
-    AWS_AFT_ACCOUNT_ID: str = os.environ["AWS_AFT_ACCOUNT_ID"]
-    AWS_LOG_ACCOUNT_ID: str = os.environ["AWS_LOG_ACCOUNT_ID"]
-    AWS_SHARED_SERVICES_ACCOUNT_ID: str = os.environ["AWS_SHARED_SERVICES_ACCOUNT_ID"]
+    AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
+    AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    AWS_ACCOUNT_ID: str = os.getenv("AWS_ACCOUNT_ID", "")
+    AWS_AFT_ACCOUNT_ID: str = os.getenv("AWS_AFT_ACCOUNT_ID", "")
+    AWS_LOG_ACCOUNT_ID: str = os.getenv("AWS_LOG_ACCOUNT_ID", "")
+    AWS_SHARED_SERVICES_ACCOUNT_ID: str = os.getenv("AWS_SHARED_SERVICES_ACCOUNT_ID", "")
 
     # Netbox
     NETBOX_URL: str = os.environ["NETBOX_URL"]

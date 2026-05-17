@@ -4,7 +4,7 @@ from mcp.server.fastmcp import FastMCP
 from config import config
 
 _gh = Github(config.GITHUB_TOKEN)
-_org = _gh.get_organization(config.GITHUB_ORG)
+_org = _gh.get_user(config.GITHUB_ORG)
 
 
 def register_scheduler_tools(mcp: FastMCP):

@@ -4,11 +4,12 @@ from mcp.server.fastmcp import FastMCP
 from config import config
 
 _gh = Github(config.GITHUB_TOKEN)
-_org = _gh.get_organization(config.GITHUB_ORG)
+# Use personal account (get_user()) — works for both personal accounts and orgs
+_user = _gh.get_user(config.GITHUB_ORG)
 
 
 def _get_repo(repo_name: str):
-    return _org.get_repo(repo_name)
+    return _user.get_repo(repo_name)
 
 
 def register_github_tools(mcp: FastMCP):
